@@ -9,6 +9,9 @@ output_folder = os.path.expanduser("~/pytools/highlighted_orders")
 
 # Create output folder if it doesn't exist
 os.makedirs(output_folder, exist_ok=True)
+# Use the filename (without extension) as the order number
+order_number = os.path.splitext(os.path.basename(~/pytools/incoming_orders))[0]
+
 
 def get_customer_name(text):
     """
@@ -30,11 +33,26 @@ def get_customer_phone(text):
     """
     Extract customer phone - only the one near the customer info section
     Must appear after an email address to be considered customer phone
+    Excludes company phone number
     """
-    # Find phone numbers that appear after email addresses
-    pattern = r'@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\n]*\n[^\n]*\n[^\n]*(\+?1?\s*\d{3}[-.\s]?\d{3}[-.\s]?\d{4})'
-    matches = re.findall(pattern, text, re.IGNORECASE)
-    return matches if matches else []
+    # Find phone numbers that appear after email addresses (simpler pattern)
+    pattern = r'@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}.*?\n.*?(\+?1?\s*\d{3}[-.\s]?\d{3}[-.\s]?\d{4})'
+    matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+    
+    if not matches:
+        return []
+    
+    # Filter out company phone
+    customer_phones = []
+    for phone in matches:
+        # Remove all non-digits to compare
+        phone_digits = re.sub(r'\D', '', phone)
+        # Skip if it's the company phone (770-354-7475)
+        if phone_digits != '17703547475' and phone_digits != '7703547475':
+            customer_phones.append(phone)
+    
+    return customer_phones
+    
 
 def get_product_names(text):
     """
@@ -113,20 +131,30 @@ def is_address_or_price(text_to_check):
     """
     Check if text is an address or price that should NOT be highlighted
     """
+    text_stripped = text_to_check.strip()
+    
     # Skip prices in any format
-    if re.search(r'\$\d+', text_to_check):
+    if '$' in text_stripped:
+        return True
+    
+    # Skip if it's just a number (could be part of address or price)
+    if re.match(r'^\d+$', text_stripped):
         return True
     
     # Skip street addresses (contains numbers followed by street words)
-    if re.search(r'\d+\s+(?:W|E|N|S|West|East|North|South|St|Street|Ave|Avenue|Dr|Drive|Rd|Road|Blvd|Boulevard|Ln|Lane|Circle|Cir|Way|Ct|Court)', text_to_check, re.IGNORECASE):
+    if re.search(r'\d+\s+(?:W|E|N|S|West|East|North|South|St|Street|Ave|Avenue|Dr|Drive|Rd|Road|Blvd|Boulevard|Ln|Lane|Circle|Cir|Way|Ct|Court)', text_stripped, re.IGNORECASE):
         return True
     
     # Skip city, state patterns
-    if re.search(r'\b(?:Atlanta|Georgia|California|Los Angeles|United States)\b', text_to_check, re.IGNORECASE):
+    if re.search(r'\b(?:Atlanta|Georgia|California|Los Angeles|United States|Ellenwood|Stone Mountain)\b', text_stripped, re.IGNORECASE):
         return True
     
     # Skip zip codes (5 digit numbers)
-    if re.match(r'^\d{5}$', text_to_check.strip()):
+    if re.match(r'^\d{5}$', text_stripped):
+        return True
+    
+    # Skip state abbreviations
+    if re.match(r'^[A-Z]{2}$', text_stripped):
         return True
     
     return False
@@ -194,6 +222,52 @@ def highlight_text_precisely(page, text_to_find, color, exclude_header=True):
     
     return highlighted_count
 
+def add_header_overlay(page, order_number, pickup_date):
+    """
+    Add enlarged order number and pickup date to top right corner
+    """
+    if not order_number and not pickup_date:
+        return
+    
+    # Get page width
+    page_width = page.rect.width
+    
+    # Font settings
+    font_size = 24
+    text_color = (0, 0, 0)  # Black
+    
+    # Position from top right corner
+    right_margin = 50
+    top_margin = 40
+    line_height = 30
+    
+    # Prepare text lines
+    lines = []
+    if order_number:
+        lines.append(order_number)
+    if pickup_date:
+        lines.append(pickup_date)
+    
+    # Add each line
+    y_position = top_margin
+    for line in lines:
+        # Simple right-aligned position (approximate)
+        x_position = page_width - right_margin - (len(line) * 10)
+        
+        # Insert text
+        page.insert_text(
+            (x_position, y_position),
+            line,
+            fontsize=font_size,
+            color=text_color
+        )
+        
+        y_position += line_height
+        
+    
+    print(f"  📌 Added header overlay: {', '.join(lines)}")
+    
+
 def highlight_pdf(input_pdf_path, output_pdf_path):
     """
     Process PDF and highlight specific fields
@@ -255,7 +329,7 @@ def highlight_pdf(input_pdf_path, output_pdf_path):
             finishing_matches = re.finditer(pattern, text, re.IGNORECASE)
             for match in finishing_matches:
                 total_highlights += highlight_text_precisely(page, match.group(), yellow)
-    
+            add_header_overlay(page, order_number, pickup_date)
     doc.save(output_pdf_path, garbage=4, deflate=True, clean=True)
     doc.close()
     
